@@ -1,0 +1,107 @@
+use core::arch::asm;
+
+use seq_macro::seq;
+
+use crate::println;
+
+/// should be 256
+const IDT_ENTRY_COUNT: usize = 256;
+
+/// ISRs
+type HandlerFunc = unsafe extern "C" fn() -> !;
+// This isn't a lazy_static b/c that seems to mess up the initialization of the IDT.
+/// The IDT itself.
+static mut IDT: [InterruptDescriptorTableEntry; IDT_ENTRY_COUNT] =
+  [InterruptDescriptorTableEntry::empty(); IDT_ENTRY_COUNT];
+
+/// Defines the 2 types of gates an IDT entry can have.
+/// After iretq,
+/// goes back to a  version of the faulty instruction.
+/// A trap would (should) continue to the next instruction.
+#[repr(u8)]
+#[allow(unused)]
+enum GateType {
+  Interrupt = 0x0E,
+  Trap = 0x0F,
+}
+
+/// nitializes the IDT with non-empty handlers & calls `lidt` to load the thing
+pub fn init_idt() {
+  unsafe {
+    seq! {N in 0..256 {
+      IDT[N] = InterruptDescriptorTableEntry::new(interrupt_stub~N, GateType::Interrupt);
+    }}
+  }
+  let idtp = InterruptDescriptorTablePtr {
+    limit: (size_of::<InterruptDescriptorTableEntry>() * IDT_ENTRY_COUNT - 1) as u16,
+    base: &raw const IDT,
+  };
+  unsafe {
+    asm!(
+      "
+      lidt [{}]
+      ",
+      in(reg) &idtp
+    )
+  }
+  println!("IDK init OK");
+}
+
+/// Data type for the `idtr`
+#[repr(C, packed)]
+#[derive(Debug)]
+struct InterruptDescriptorTablePtr {
+  limit: u16,
+  base: *const [InterruptDescriptorTableEntry; IDT_ENTRY_COUNT],
+}
+
+/// Describes an entry in the IDT
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+struct InterruptDescriptorTableEntry {
+  offset_low: u16,
+  selector: u16,
+  ist: u8,
+  options: u8,
+  offset_mid: u16,
+  offset_high: u32,
+  reserved: u32,
+}
+impl InterruptDescriptorTableEntry {
+  /// Creates a non-empty entry in the IDT
+  fn new(handler: HandlerFunc, gate_type: GateType) -> Self {
+    let offset = handler as u64;
+    Self {
+      offset_low: offset as u16,
+      selector: 0x08,
+      ist: 0,
+      options: 0x80 | gate_type as u8,
+      offset_mid: (offset >> 16) as u16,
+      offset_high: (offset >> 32) as u32,
+      reserved: 0,
+    }
+  }
+  /// Creates an empty entry in the IDT
+  const fn empty() -> Self {
+    Self {
+      offset_low: 0,
+      selector: 0,
+      ist: 0,
+      options: 0xE0,
+      offset_mid: 0,
+      offset_high: 0,
+      reserved: 0,
+    }
+  }
+}
+
+seq! { N in 0..256 {
+  unsafe extern "C" {
+    fn interrupt_stub~N() -> !;
+  }
+}}
+
+#[unsafe(no_mangle)]
+extern "C" fn interrupt_dispatch(vector: u64, error_code: u64) {
+  println!("INTERRUPT: 0x0{:x}, ERROR CODE: 0x{:x}", vector, error_code);
+}

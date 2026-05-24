@@ -1,0 +1,1 @@
+{ "languages": { "Assembly": { "language_servers": ["!asm-lsp"] } } }
